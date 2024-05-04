@@ -1,0 +1,89 @@
+# Docker Commands - Section 4
+docker container run --publish 80:80 --detach --name nginx-server nginx
+
+docker container run --publish 8080:80 --detach --name httpd-server httpd
+
+docker container run --publish 3306:3306  --detach --name mysql-server --env MYSQL_RANDOM_ROOT_PASSWORD=yes mysql
+
+docker container ls
+
+docker container logs mysql-server
+
+docker container stop mysql-server httpd-server nginx-server
+
+docker container ls -a 
+
+docker container rm mysql-server httpd-server nginx-server
+
+docker container logs -f container_name -> it keeps watching for logs
+
+# Inspecting Container 
+docker container top nginx -> process list in container
+
+docker container inspect mysql-server -> details of container config
+
+docker container stats -> performance stats of containers
+
+docker container port container-name -> inspecting port mapping 
+
+# Getting Inside of Container
+docker container run -it --name proxy nginx bash -> Running container interactively. Once exited container will stop
+
+docker exec -it mysql-server bash -> getting inside running containers. Container will not stop once exited
+
+# Notes
+
+You can use "prune" commands to clean up images, volumes, build cache, and containers. Examples include:
+
+- docker image prune to clean up just "dangling" images
+
+- docker system prune will clean up everything you're not currently using
+
+- The big one is usually docker image prune -a which will remove all images you're not using. Use docker system df to see space usage.
+
+
+ ## Creating and using volumes
+
+Postgres Container
+docker volume create psql
+docker run -d --name psql1 -e POSTGRES_PASSWORD=mypassword -v psql:/var/lib/postgresql/data postgres:15.1
+docker logs psql1
+docker stop psql1
+docker run -d --name psql2 -e POSTGRES_PASSWORD=mypassword -v psql:/var/lib/postgresql/data postgres:15.2
+docker logs psql2
+docker stop psql2
+
+## File Permissions Across Multiple Containers
+At some point you'll have file permissions problems with container apps not having the permissions they need. Maybe you want multiple containers to access the same volume(s). Or maybe you're bind-mounting existing files into a container.
+
+Note that the below info is about pure Linux hosts, like production server setups. If you're using Docker Desktop locally, it will translate permissions from your host (macOS & Windows) into the container (Linux) automatically, but when working on pure Linux servers with just dockerd, no translation is made.
+
+How file permissions work across multiple containers accessing the same volume or bind-mount
+File ownership between containers and the host are just numbers. They stay consistent no matter how you run them. Sometimes you see friendly user names in commands like ls but those are just name-to-number aliases that you'll see in `/etc/passwd` and `/etc/group`. Your host has those files, and usually, your containers will have their own. They are usually different. These files are really just for humans to see friendly names. The Linux Kernel only cares about IDs, which are attached to each file and directory in the file system itself, and those IDs are the same no matter which process accesses them.
+
+When a container is just accessing its own files, this isn't usually an issue.
+
+But for multiple containers accessing the same volume or bind-mount, problems can arise in two ways:
+
+1. Problem one: The `/etc/passwd` is different across containers. Creating a named user in one container and running as that user may use ID 700, but that same name in another container with a different `/etc/passwd` may use a different ID for that same username. That's why I only care about IDs when trying to sync up permissions. You'll see this confusion if you're running a container on a Linux VM and it had a volume or bind-mount. If you do an ls on those files from the host, it may show them owned by ubuntu or node or systemd, etc. Then if you run ls inside the container, it may show a different friendly username. The IDs are the same in both cases, but the host will have a different passwd file than the container, and show you different friendly names. Different names are fine, because it's only ID that counts. Two processes trying to access the same file must have a matching user ID or group ID.
+
+2. Problem two: Your two containers are running as different users. Maybe the user/group IDs and/or the USER statement in your Dockerfiles are different, and the two containers are technically running under different IDs. Different apps will end up running as different IDs. For example, the node base image creates a user called node with ID of 1000, but the NGINX image creates an nginx user as ID 101. Also, some apps spin-off sub-processes as different users. NGINX starts its main process (PID 1) as root (ID 0) but spawns sub-processes as the nginx user (ID 101), which keeps it more secure.
+
+So for troubleshooting, this is what I do:
+Use the command ps aux in each container to see a list of processes and usernames. The process needs a matching user ID or group ID to access the files in question.
+
+Find the UID/GID in each containers `/etc/passwd` and `/etc/group` to translate names to numbers. You'll likely find there a miss-match, where one containers process originally wrote the files with its UID/GID and the other containers process is running as a different UID/GID.
+
+Figure out a way to ensure both containers are running with either a matching user ID or group ID. This is often easier to manage in your own custom app (when using a language base image like python or node) rather than trying to change a 3rd party app's container (like nginx or postgres)... but it all depends. This may mean creating a new user in one Dockerfile and setting the startup user with USER. (see USER docs) The node default image has a good example of the commands for creating a user and group with hard-coded IDs:
+
+RUN groupadd --gid 1000 node \\
+&& useradd --uid 1000 --gid node --shell /bin/bash --create-home node
+USER 1000:1000
+Note: When setting a Dockerfile's USER, use numbers, which work better in Kubernetes than using names.
+
+Note 2: If ps doesn't work in your container, you may need to install it. In debian-based images with apt, you can add it with apt-get update && apt-get install procps
+
+
+
+
+
